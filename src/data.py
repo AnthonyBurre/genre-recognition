@@ -12,6 +12,7 @@ here — flagged so the user can swap in a fault-filtered split file later.
 """
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,13 @@ from .config import (
 
 
 GTZAN_AUDIO_SUBDIR = "genres_original"
+
+# `jazz.00054.wav` ships with a corrupted RIFF header in every redistribution
+# of GTZAN — soundfile can't open it. The standard remedy is to drop it; the
+# alternative (ffmpeg re-encode) introduces a binary dependency for one file.
+# Net effect: jazz has 99 tracks instead of 100. Acceptable given that the
+# dataset is already documented as fault-ridden (see Sturm 2013).
+_KNOWN_BAD_TRACK_IDS: frozenset[str] = frozenset({"jazz.00054"})
 
 
 @dataclass
@@ -68,6 +76,8 @@ def build_index(audio_root: Path | None = None) -> pd.DataFrame:
         if not wavs:
             raise FileNotFoundError(f"No .wav files under {genre_dir}")
         for wav in wavs:
+            if wav.stem in _KNOWN_BAD_TRACK_IDS:
+                continue
             rows.append({
                 "path": str(wav),
                 "genre": genre,
@@ -119,7 +129,16 @@ def save_split(split: Split, out_dir: Path = SPLITS_DIR) -> None:
     split.test.to_csv(out_dir / "test.csv", index=False)
 
 
-def load_split(split_dir: Path = SPLITS_DIR) -> Split:
+def _split_dir_for(variant: str) -> Path:
+    if variant == "naive":
+        return SPLITS_DIR
+    if variant == "filtered":
+        return SPLITS_DIR / "filtered"
+    raise ValueError(f"Unknown split variant '{variant}' — expected 'naive' or 'filtered'.")
+
+
+def load_split(variant: str = "naive") -> Split:
+    split_dir = _split_dir_for(variant)
     return Split(
         train=pd.read_csv(split_dir / "train.csv"),
         val=pd.read_csv(split_dir / "val.csv"),
@@ -127,15 +146,219 @@ def load_split(split_dir: Path = SPLITS_DIR) -> Split:
     )
 
 
-def get_or_build_split(rebuild: bool = False) -> Split:
-    """Idempotent: builds the split once, reuses it forever after."""
-    expected = [SPLITS_DIR / f for f in ("train.csv", "val.csv", "test.csv")]
+def get_or_build_split(rebuild: bool = False, variant: str = "naive") -> Split:
+    """Idempotent: builds the requested split once, reuses it forever after."""
+    split_dir = _split_dir_for(variant)
+    expected = [split_dir / f for f in ("train.csv", "val.csv", "test.csv")]
     if not rebuild and all(p.exists() for p in expected):
-        return load_split()
+        return load_split(variant=variant)
     index = build_index()
-    split = stratified_split(index)
-    save_split(split)
+    if variant == "naive":
+        split = stratified_split(index)
+    else:
+        split = build_filtered_split(index)
+    save_split(split, out_dir=split_dir)
     return split
+
+
+# ---------------------------------------------------------------------------
+# Fault-filtered split — addresses GTZAN's documented duplicates and
+# artist/album leakage (Sturm 2013, Kereliuk 2015).
+# ---------------------------------------------------------------------------
+
+# Cosine-distance threshold in z-scored 20-d MFCC-mean space. Anything below
+# this is considered a near-duplicate; raw MFCCs would have mfcc0 (energy)
+# dominate the angle, hence the z-score. Empirically captures roughly the
+# bottom 1% of within-genre pairs on GTZAN.
+DUP_THRESH = 0.05
+
+# Target number of pseudo-artist groups per genre. Fixed-k clustering (rather
+# than fixed-distance) keeps every genre well-populated regardless of how
+# tight or sparse the within-genre MFCC manifold is — classical/jazz are
+# both far more homogeneous than rock/disco.
+N_GROUPS_PER_GENRE = 15
+
+
+def _zscored_cosine_distances(X: np.ndarray) -> np.ndarray:
+    """Cosine distances in the per-dimension z-scored space.
+
+    With raw MFCC means the first coefficient (overall log-energy) has 25×
+    the spread of the higher coefficients, so cosine angles are dominated
+    by it. Z-scoring equalizes axis weights before the angle is taken.
+    """
+    from sklearn.metrics.pairwise import cosine_distances
+    from sklearn.preprocessing import StandardScaler
+
+    Xs = StandardScaler().fit_transform(X)
+    return cosine_distances(Xs)
+
+
+def build_filtered_split(
+    index: Optional[pd.DataFrame] = None,
+    seed: int = RANDOM_SEED,
+    train_frac: float = TRAIN_FRAC,
+    val_frac: float = VAL_FRAC,
+    test_frac: float = TEST_FRAC,
+    dup_thresh: float = DUP_THRESH,
+    n_groups_per_genre: int = N_GROUPS_PER_GENRE,
+    verbose: bool = True,
+) -> Split:
+    """Build a fault-filtered split.
+
+    Pipeline:
+      1. Extract per-clip MFCC means (reusing the cached feature pipeline).
+      2. Within each genre, drop near-duplicates (z-scored cosine distance
+         < ``dup_thresh``). The lexicographically smallest ``track_id``
+         survives each duplicate cluster.
+      3. Within each genre, agglomerative-cluster the survivors with
+         ``n_clusters=n_groups_per_genre`` and ``linkage='complete'`` to
+         form pseudo-artist groups. Fixed-k keeps every genre
+         well-populated; complete linkage avoids chain-merging.
+      4. Per-genre, sort groups by size descending and greedy-assign each
+         to the bucket with the largest size-weighted deficit. The largest
+         groups get placed first so they can't all clump into train.
+         Each non-empty bucket is guaranteed at least one group per genre
+         when group count allows.
+
+    Group ids are written into the resulting ``group_id`` column so callers
+    can confirm the no-leak property at any time.
+    """
+    from sklearn.cluster import AgglomerativeClustering
+
+    from .features import extract  # local import to avoid circular at module load
+
+    if index is None:
+        index = build_index()
+
+    if verbose:
+        print(f"[filter] extracting MFCC means for {len(index)} tracks "
+              "(joblib-cached; fast on re-runs)")
+    fm = extract(index, desc="filter:mfcc")
+    mfcc_cols = [f"mfcc{i}_mean" for i in range(20)]
+    col_idx = [fm.feature_names.index(c) for c in mfcc_cols]
+    mfcc_means = fm.X[:, col_idx]  # (n_tracks, 20)
+
+    # Distances are computed once in z-scored space and reused for both
+    # dedup and grouping.
+    dist_all = _zscored_cosine_distances(mfcc_means)
+
+    # 1+2: per-genre dedup.
+    keep_mask = np.ones(len(index), dtype=bool)
+    track_ids = index["track_id"].to_numpy()
+    labels = index["label"].to_numpy()
+    for genre_idx in range(len(GENRES)):
+        genre_indices = np.where(labels == genre_idx)[0]
+        if len(genre_indices) < 2:
+            continue
+        for ii in range(len(genre_indices)):
+            gi = genre_indices[ii]
+            if not keep_mask[gi]:
+                continue
+            for jj in range(ii + 1, len(genre_indices)):
+                gj = genre_indices[jj]
+                if not keep_mask[gj]:
+                    continue
+                if dist_all[gi, gj] < dup_thresh:
+                    # Keep the lexicographically-smaller track_id.
+                    if track_ids[gi] <= track_ids[gj]:
+                        keep_mask[gj] = False
+                    else:
+                        keep_mask[gi] = False
+                        break
+    n_dropped = int((~keep_mask).sum())
+    if verbose:
+        print(f"[filter] dropped {n_dropped} near-duplicates "
+              f"(z-scored cosine threshold={dup_thresh})")
+
+    filtered_index = index[keep_mask].copy().reset_index(drop=True)
+    kept_orig_indices = np.where(keep_mask)[0]
+
+    # 3: per-genre agglomerative grouping with fixed k.
+    group_ids = np.empty(len(filtered_index), dtype=object)
+    flabels = filtered_index["label"].to_numpy()
+    for genre_idx, genre in enumerate(GENRES):
+        local_idxs = np.where(flabels == genre_idx)[0]
+        if len(local_idxs) <= 1:
+            for k, i in enumerate(local_idxs):
+                group_ids[i] = f"{genre}-{k}"
+            continue
+        # Use the precomputed z-scored cosine submatrix.
+        orig_idxs = kept_orig_indices[local_idxs]
+        sub_dist = dist_all[np.ix_(orig_idxs, orig_idxs)]
+        n_clusters = min(n_groups_per_genre, len(local_idxs))
+        clusterer = AgglomerativeClustering(
+            n_clusters=n_clusters,
+            linkage="complete",
+            metric="precomputed",
+        )
+        clusters = clusterer.fit_predict(sub_dist)
+        for i, c in zip(local_idxs, clusters):
+            group_ids[i] = f"{genre}-{int(c)}"
+    filtered_index["group_id"] = group_ids
+
+    # 4: per-genre size-aware greedy split with bucket-coverage guarantee.
+    rng = np.random.default_rng(seed)
+    target_fracs = {"train": train_frac, "val": val_frac, "test": test_frac}
+    pieces: dict[str, list[pd.DataFrame]] = {"train": [], "val": [], "test": []}
+    summary_rows = []
+    for genre_idx, genre in enumerate(GENRES):
+        sub = filtered_index[filtered_index["label"] == genre_idx]
+        groups = [(gid, gdf) for gid, gdf in sub.groupby("group_id", sort=False)]
+        # Within equal-size buckets, the random shuffle decides which group
+        # goes where, so the assignment is reproducibly randomized.
+        rng.shuffle(groups)
+        groups.sort(key=lambda gx: -len(gx[1]))  # largest first; stable on ties
+        n_total = len(sub)
+        current = {"train": 0, "val": 0, "test": 0}
+
+        # Reservation pass — guarantee each non-empty bucket gets at least one
+        # group, picked from the smallest groups so the dominant cluster
+        # doesn't end up isolated in val or test.
+        reserved: dict[str, str] = {}
+        small_first = sorted(groups, key=lambda gx: len(gx[1]))
+        for bucket, frac in target_fracs.items():
+            if frac <= 0:
+                continue
+            for gid, gdf in small_first:
+                if gid in reserved.values():
+                    continue
+                reserved[bucket] = gid
+                pieces[bucket].append(gdf)
+                current[bucket] += len(gdf)
+                break
+
+        # Greedy fill for the remaining groups.
+        for gid, gdf in groups:
+            if gid in reserved.values():
+                continue
+            deficit = {
+                bucket: target_fracs[bucket] * n_total - current[bucket]
+                for bucket in target_fracs
+            }
+            best = max(deficit, key=deficit.get)
+            pieces[best].append(gdf)
+            current[best] += len(gdf)
+        summary_rows.append((genre, len(groups), n_total, current))
+
+    if verbose:
+        print("[filter] per-genre groups (genre, n_groups, n_tracks, "
+              "train/val/test counts):")
+        for genre, n_groups, n_total, current in summary_rows:
+            print(f"  {genre:>10}: {n_groups:3d} groups  "
+                  f"{n_total:3d} tracks  "
+                  f"train={current['train']:3d}  "
+                  f"val={current['val']:3d}  "
+                  f"test={current['test']:3d}")
+
+    train_df = pd.concat(pieces["train"], ignore_index=True)
+    val_df = pd.concat(pieces["val"], ignore_index=True)
+    test_df = pd.concat(pieces["test"], ignore_index=True)
+    sort_key = "track_id"
+    return Split(
+        train=train_df.sort_values(sort_key).reset_index(drop=True),
+        val=val_df.sort_values(sort_key).reset_index(drop=True),
+        test=test_df.sort_values(sort_key).reset_index(drop=True),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -255,15 +478,19 @@ def download(force: bool = False) -> None:
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    # Verify the layout end-to-end through the same indexer training uses.
-    index = build_index()
-    counts = index["genre"].value_counts().reindex(GENRES, fill_value=0)
-    if (counts != EXPECTED_PER_GENRE).any():
+    # Verify the layout matches GTZAN's full 10x100 shape on disk. We check
+    # filesystem counts directly rather than going through ``build_index`` —
+    # the indexer drops known-bad tracks (see ``_KNOWN_BAD_TRACK_IDS``), but
+    # those files do still arrive in the tarball and should land on disk.
+    on_disk = {g: sum(1 for _ in (audio_root / g).glob("*.wav")) for g in GENRES}
+    bad = {g: c for g, c in on_disk.items() if c != EXPECTED_PER_GENRE}
+    if bad:
         raise RuntimeError(
             f"Post-download layout check failed. Expected {EXPECTED_PER_GENRE} "
-            f"tracks per genre, got:\n{counts.to_string()}"
+            f"tracks per genre, got mismatches: {bad}"
         )
-    print(f"[download] OK — {len(index)} tracks across {len(GENRES)} genres at "
+    total = sum(on_disk.values())
+    print(f"[download] OK — {total} tracks across {len(GENRES)} genres at "
           f"{audio_root}")
 
 
@@ -281,10 +508,20 @@ def _main(argv: list[str] | None = None) -> int:
                         help="Fetch GTZAN via Hugging Face into data/raw/.")
     parser.add_argument("--force", action="store_true",
                         help="Redownload even if data/raw/ already looks populated.")
+    parser.add_argument("--build-filtered-split", action="store_true",
+                        help="Construct the fault-filtered split (dedup + "
+                             "pseudo-artist grouping). Prints per-genre group "
+                             "counts and writes data/splits/filtered/.")
     args = parser.parse_args(argv)
 
     if args.download:
         download(force=args.force)
+        return 0
+
+    if args.build_filtered_split:
+        split = get_or_build_split(rebuild=True, variant="filtered")
+        print("[filtered split]")
+        print(split.describe())
         return 0
 
     split = get_or_build_split()

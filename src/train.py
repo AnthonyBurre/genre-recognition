@@ -1,28 +1,48 @@
 """End-to-end training + evaluation driver.
 
 Usage:
-    python -m src.train --model random
-    python -m src.train --model random --run-name baseline-v1
-    python -m src.train --model random --rebuild-split
+    python -m src.train --model logreg
+    python -m src.train --model svm_rbf --augment default
+    python -m src.train --model gbt --split filtered --segments
+    python -m src.train --model logreg --rebuild-split
 """
 import argparse
 import sys
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
+import pandas as pd
+
+from . import augment as augment_mod
 from . import features as features_mod
 from . import models
 from .config import RESULTS_DIR
 from .data import get_or_build_split
 from .evaluate import evaluate
-from .features import FeatureMatrix
+from .features import AudioTransform, FeatureMatrix
 
 
-def _maybe_extract(model, manifest, desc: str) -> Optional[FeatureMatrix]:
+def _prepare(
+    model,
+    manifest: pd.DataFrame,
+    desc: str,
+    *,
+    use_segments: bool,
+    transform: Optional[AudioTransform] = None,
+) -> tuple[Optional[FeatureMatrix], pd.DataFrame]:
+    """Return (features, possibly-expanded manifest) for ``model``.
+
+    If the model doesn't need features, both manifest and features pass
+    through untouched. If ``use_segments`` is set, we expand the manifest
+    to one row per ~3s segment and the FeatureMatrix's row-count matches.
+    """
     if not model.requires_features:
-        return None
-    return features_mod.extract(manifest, desc=desc)
+        return None, manifest
+    if use_segments:
+        return features_mod.extract_segments(
+            manifest, desc=desc, transform=transform,
+        )
+    return features_mod.extract(manifest, desc=desc, transform=transform), manifest
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,6 +55,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--eval-test", action="store_true",
                         help="Also evaluate on the held-out test set. Off by default to avoid "
                              "test-set leakage during model iteration.")
+    parser.add_argument("--augment", default="none", choices=["none", "default"],
+                        help="Waveform augmentation chain applied to the train split only.")
+    parser.add_argument("--split", default="naive", choices=["naive", "filtered"],
+                        help="Which split to evaluate on. 'filtered' suppresses GTZAN's "
+                             "duplicates and artist/album leakage — accuracy will be lower "
+                             "but more honest.")
+    parser.add_argument("--segments", action="store_true",
+                        help="Train per-segment (~3s windows, 1.5s hop) and aggregate "
+                             "predictions back to the track level for headline metrics.")
     args = parser.parse_args(argv)
 
     run_name = args.run_name or f"{args.model}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -42,24 +71,35 @@ def main(argv: list[str] | None = None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"[run] {run_dir}")
 
-    split = get_or_build_split(rebuild=args.rebuild_split)
-    print("[split]")
+    split = get_or_build_split(rebuild=args.rebuild_split, variant=args.split)
+    print(f"[split:{args.split}]")
     print(split.describe())
 
     model = models.build(args.model)
-    print(f"[model] {model.name} (requires_features={model.requires_features})")
+    print(f"[model] {model.name} (requires_features={model.requires_features}) "
+          f"segments={args.segments}")
 
-    train_feats = _maybe_extract(model, split.train, desc="features:train")
-    val_feats = _maybe_extract(model, split.val, desc="features:val")
+    train_transform = augment_mod.default_chain() if args.augment == "default" else None
+    if train_transform is not None:
+        print(f"[augment] train-only chain: {args.augment}")
 
-    model.fit(train_feats, split.train)
+    train_feats, train_manifest = _prepare(
+        model, split.train, desc=("segments:train" if args.segments else "features:train"),
+        use_segments=args.segments, transform=train_transform,
+    )
+    val_feats, val_manifest = _prepare(
+        model, split.val, desc=("segments:val" if args.segments else "features:val"),
+        use_segments=args.segments,
+    )
 
-    val_pred = model.predict(val_feats, split.val)
-    val_proba = model.predict_proba(val_feats, split.val)
+    model.fit(train_feats, train_manifest)
+
+    val_pred = model.predict(val_feats, val_manifest)
+    val_proba = model.predict_proba(val_feats, val_manifest)
     val_summary = evaluate(
         model_name=model.name,
         split_name="val",
-        manifest=split.val,
+        manifest=val_manifest,
         y_pred=val_pred,
         y_proba=val_proba,
         out_dir=run_dir,
@@ -67,13 +107,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[val] acc={val_summary.accuracy:.3f}  macro_f1={val_summary.macro_f1:.3f}")
 
     if args.eval_test:
-        test_feats = _maybe_extract(model, split.test, desc="features:test")
-        test_pred = model.predict(test_feats, split.test)
-        test_proba = model.predict_proba(test_feats, split.test)
+        test_feats, test_manifest = _prepare(
+            model, split.test, desc=("segments:test" if args.segments else "features:test"),
+            use_segments=args.segments,
+        )
+        test_pred = model.predict(test_feats, test_manifest)
+        test_proba = model.predict_proba(test_feats, test_manifest)
         test_summary = evaluate(
             model_name=model.name,
             split_name="test",
-            manifest=split.test,
+            manifest=test_manifest,
             y_pred=test_pred,
             y_proba=test_proba,
             out_dir=run_dir,
