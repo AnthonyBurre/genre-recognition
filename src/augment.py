@@ -1,4 +1,4 @@
-"""Audio augmentation primitives — applied to the raw waveform.
+"""Audio augmentation primitives - applied to the raw waveform.
 
 The interface is intentionally minimal: any callable ``(audio, sr) -> audio``
 is a valid transform, and ``Compose`` chains them. This composes naturally
@@ -86,7 +86,7 @@ class PolarityInversion:
 
     Audibly identical to the original but doubles the variety the encoder
     sees in the time domain. Spectral magnitudes are unchanged, so the
-    effect is subtle — it mostly regularizes the time-domain features (zcr,
+    effect is subtle - it mostly regularizes the time-domain features (zcr,
     crest factor) against fragile sign conventions.
     """
     p: float = 0.5
@@ -137,7 +137,7 @@ class PitchShift:
 def default_chain(seed: int = RANDOM_SEED) -> Compose:
     """Conservative augmentation chain that's safe to apply unconditionally.
 
-    Excludes time-stretch / pitch-shift by default — both are slow and have
+    Excludes time-stretch / pitch-shift by default - both are slow and have
     the strongest potential to confuse genre cues (tempo for rhythm-heavy
     genres, key/timbre for classical/jazz). Add them deliberately when
     iterating, not as a baseline.

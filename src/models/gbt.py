@@ -1,18 +1,16 @@
 """Histogram-based gradient boosting on the summary feature vector.
 
 Tree-based, so feature scaling isn't needed and feature interactions are
-captured cheaply. A useful contrast to the linear/kernel models — different
+captured cheaply. A useful contrast to the linear/kernel models - different
 inductive biases tend to make different errors, which shows up clearly in
 the confusion matrices.
 """
 from typing import Optional
 
 import numpy as np
-import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 
 from ..config import RANDOM_SEED
-from ..features import FeatureMatrix
 from .base import GenreClassifier
 
 
@@ -34,27 +32,12 @@ class GBTClassifier(GenreClassifier):
             random_state=seed,
         )
 
-    def fit(
-        self,
-        train_features: Optional[FeatureMatrix],
-        train_manifest: pd.DataFrame,
-    ) -> "GBTClassifier":
-        assert train_features is not None
-        self.clf.fit(train_features.X, train_features.y)
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "GBTClassifier":
+        self.clf.fit(X, y)
         return self
 
-    def predict(
-        self,
-        features: Optional[FeatureMatrix],
-        manifest: pd.DataFrame,
-    ) -> np.ndarray:
-        assert features is not None
-        return self.clf.predict(features.X)
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return self.clf.predict(X)
 
-    def predict_proba(
-        self,
-        features: Optional[FeatureMatrix],
-        manifest: pd.DataFrame,
-    ) -> np.ndarray:
-        assert features is not None
-        return self.clf.predict_proba(features.X)
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        return self.clf.predict_proba(X)

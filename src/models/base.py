@@ -1,25 +1,20 @@
 """Base contract every genre classifier must satisfy.
 
-Two execution paths are supported:
+Standard sklearn-style: ``fit(X, y)``, ``predict(X)``, optional
+``predict_proba(X)``. Predictions are class indices ordered by
+``config.GENRES``; probability matrices are shape ``(n_samples, n_classes)``
+in the same order.
 
-  - feature-based: ``requires_features = True`` — model is fitted on
-    ``(X, y)`` matrices produced by ``src.features.extract``.
-  - manifest-based: ``requires_features = False`` — model receives the
-    raw manifest DataFrame (paths + labels) and decides what to do with
-    it. Used by the random baseline (which only needs labels) and is the
-    seam where future end-to-end audio models will plug in.
-
-Models always return predicted class indices, and optionally a
-probability matrix shaped ``(n_samples, n_classes)`` ordered by
-``config.GENRES``.
+The ``requires_features`` class attribute tells ``train.py`` whether to run
+the (slow) feature pipeline for this model. When ``False`` (e.g. the
+random baseline, which only needs label statistics), the driver hands the
+model a zero-width ``X`` so the call sites stay uniform - every model
+accepts ``(X, y)`` regardless.
 """
 from abc import ABC, abstractmethod
 from typing import Optional
 
 import numpy as np
-import pandas as pd
-
-from ..features import FeatureMatrix
 
 
 class GenreClassifier(ABC):
@@ -27,25 +22,15 @@ class GenreClassifier(ABC):
     requires_features: bool = True
 
     @abstractmethod
-    def fit(
-        self,
-        train_features: Optional[FeatureMatrix],
-        train_manifest: pd.DataFrame,
-    ) -> "GenreClassifier":
-        """Train the model. Implementations use whichever input they need."""
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "GenreClassifier":
+        """Train on (X, y). For ``requires_features=False`` models, X may be
+        zero-width - the model is expected to use only y (and ``X.shape[0]``
+        at predict time)."""
 
     @abstractmethod
-    def predict(
-        self,
-        features: Optional[FeatureMatrix],
-        manifest: pd.DataFrame,
-    ) -> np.ndarray:
+    def predict(self, X: np.ndarray) -> np.ndarray:
         """Return predicted class indices, shape ``(n_samples,)``."""
 
-    def predict_proba(
-        self,
-        features: Optional[FeatureMatrix],
-        manifest: pd.DataFrame,
-    ) -> Optional[np.ndarray]:
-        """Optional. Default ``None`` — evaluation falls back to one-hots."""
+    def predict_proba(self, X: np.ndarray) -> Optional[np.ndarray]:
+        """Optional. Default ``None`` - evaluation falls back to one-hots."""
         return None

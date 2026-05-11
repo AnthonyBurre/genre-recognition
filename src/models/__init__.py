@@ -1,4 +1,4 @@
-"""Model registry — adding a model is one line."""
+"""Model registry - adding a model is one line."""
 from typing import Callable, Dict
 
 from .base import GenreClassifier

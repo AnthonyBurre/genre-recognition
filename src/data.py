@@ -8,7 +8,7 @@ machines.
 Known issues (Sturm, "The GTZAN dataset: Its contents, its faults, their
 effects on evaluation, and its future use", 2013): exact duplicates,
 mislabelings, and artist/album leakage across the splits. Not corrected
-here — flagged so the user can swap in a fault-filtered split file later.
+here - flagged so the user can swap in a fault-filtered split file later.
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +33,7 @@ from .config import (
 GTZAN_AUDIO_SUBDIR = "genres_original"
 
 # `jazz.00054.wav` ships with a corrupted RIFF header in every redistribution
-# of GTZAN — soundfile can't open it. The standard remedy is to drop it; the
+# of GTZAN - soundfile can't open it. The standard remedy is to drop it; the
 # alternative (ffmpeg re-encode) introduces a binary dependency for one file.
 # Net effect: jazz has 99 tracks instead of 100. Acceptable given that the
 # dataset is already documented as fault-ridden (see Sturm 2013).
@@ -134,7 +134,7 @@ def _split_dir_for(variant: str) -> Path:
         return SPLITS_DIR
     if variant == "filtered":
         return SPLITS_DIR / "filtered"
-    raise ValueError(f"Unknown split variant '{variant}' — expected 'naive' or 'filtered'.")
+    raise ValueError(f"Unknown split variant '{variant}' - expected 'naive' or 'filtered'.")
 
 
 def load_split(variant: str = "naive") -> Split:
@@ -162,7 +162,7 @@ def get_or_build_split(rebuild: bool = False, variant: str = "naive") -> Split:
 
 
 # ---------------------------------------------------------------------------
-# Fault-filtered split — addresses GTZAN's documented duplicates and
+# Fault-filtered split - addresses GTZAN's documented duplicates and
 # artist/album leakage (Sturm 2013, Kereliuk 2015).
 # ---------------------------------------------------------------------------
 
@@ -174,7 +174,7 @@ DUP_THRESH = 0.05
 
 # Target number of pseudo-artist groups per genre. Fixed-k clustering (rather
 # than fixed-distance) keeps every genre well-populated regardless of how
-# tight or sparse the within-genre MFCC manifold is — classical/jazz are
+# tight or sparse the within-genre MFCC manifold is - classical/jazz are
 # both far more homogeneous than rock/disco.
 N_GROUPS_PER_GENRE = 15
 
@@ -311,7 +311,7 @@ def build_filtered_split(
         n_total = len(sub)
         current = {"train": 0, "val": 0, "test": 0}
 
-        # Reservation pass — guarantee each non-empty bucket gets at least one
+        # Reservation pass - guarantee each non-empty bucket gets at least one
         # group, picked from the smallest groups so the dominant cluster
         # doesn't end up isolated in val or test.
         reserved: dict[str, str] = {}
@@ -479,7 +479,7 @@ def download(force: bool = False) -> None:
         tmp_path.unlink(missing_ok=True)
 
     # Verify the layout matches GTZAN's full 10x100 shape on disk. We check
-    # filesystem counts directly rather than going through ``build_index`` —
+    # filesystem counts directly rather than going through ``build_index`` -
     # the indexer drops known-bad tracks (see ``_KNOWN_BAD_TRACK_IDS``), but
     # those files do still arrive in the tarball and should land on disk.
     on_disk = {g: sum(1 for _ in (audio_root / g).glob("*.wav")) for g in GENRES}
@@ -490,7 +490,7 @@ def download(force: bool = False) -> None:
             f"tracks per genre, got mismatches: {bad}"
         )
     total = sum(on_disk.values())
-    print(f"[download] OK — {total} tracks across {len(GENRES)} genres at "
+    print(f"[download] OK - {total} tracks across {len(GENRES)} genres at "
           f"{audio_root}")
 
 
@@ -502,7 +502,7 @@ def _main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="GTZAN data utilities — download and split inspection."
+        description="GTZAN data utilities - download and split inspection."
     )
     parser.add_argument("--download", action="store_true",
                         help="Fetch GTZAN via Hugging Face into data/raw/.")

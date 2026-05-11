@@ -29,15 +29,17 @@ def _prepare(
     *,
     use_segments: bool,
     transform: Optional[AudioTransform] = None,
-) -> tuple[Optional[FeatureMatrix], pd.DataFrame]:
+) -> tuple[FeatureMatrix, pd.DataFrame]:
     """Return (features, possibly-expanded manifest) for ``model``.
 
-    If the model doesn't need features, both manifest and features pass
-    through untouched. If ``use_segments`` is set, we expand the manifest
-    to one row per ~3s segment and the FeatureMatrix's row-count matches.
+    For ``requires_features=False`` models we hand back a zero-width
+    FeatureMatrix carrying labels and track ids only - that keeps the
+    model call sites uniform without paying for real feature extraction.
+    With ``use_segments`` set, the manifest is expanded to one row per
+    ~3s segment and the FeatureMatrix's row count matches.
     """
     if not model.requires_features:
-        return None, manifest
+        return FeatureMatrix.empty(manifest), manifest
     if use_segments:
         return features_mod.extract_segments(
             manifest, desc=desc, transform=transform,
@@ -59,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Waveform augmentation chain applied to the train split only.")
     parser.add_argument("--split", default="naive", choices=["naive", "filtered"],
                         help="Which split to evaluate on. 'filtered' suppresses GTZAN's "
-                             "duplicates and artist/album leakage — accuracy will be lower "
+                             "duplicates and artist/album leakage - accuracy will be lower "
                              "but more honest.")
     parser.add_argument("--segments", action="store_true",
                         help="Train per-segment (~3s windows, 1.5s hop) and aggregate "
@@ -83,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     if train_transform is not None:
         print(f"[augment] train-only chain: {args.augment}")
 
-    train_feats, train_manifest = _prepare(
+    train_feats, _ = _prepare(
         model, split.train, desc=("segments:train" if args.segments else "features:train"),
         use_segments=args.segments, transform=train_transform,
     )
@@ -92,10 +94,10 @@ def main(argv: list[str] | None = None) -> int:
         use_segments=args.segments,
     )
 
-    model.fit(train_feats, train_manifest)
+    model.fit(train_feats.X, train_feats.y)
 
-    val_pred = model.predict(val_feats, val_manifest)
-    val_proba = model.predict_proba(val_feats, val_manifest)
+    val_pred = model.predict(val_feats.X)
+    val_proba = model.predict_proba(val_feats.X)
     val_summary = evaluate(
         model_name=model.name,
         split_name="val",
@@ -111,8 +113,8 @@ def main(argv: list[str] | None = None) -> int:
             model, split.test, desc=("segments:test" if args.segments else "features:test"),
             use_segments=args.segments,
         )
-        test_pred = model.predict(test_feats, test_manifest)
-        test_proba = model.predict_proba(test_feats, test_manifest)
+        test_pred = model.predict(test_feats.X)
+        test_proba = model.predict_proba(test_feats.X)
         test_summary = evaluate(
             model_name=model.name,
             split_name="test",

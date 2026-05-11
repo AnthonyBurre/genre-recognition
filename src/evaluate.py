@@ -177,7 +177,7 @@ def _plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_na
         cm, annot=True, fmt="d", cmap="Blues", cbar=False,
         xticklabels=GENRES, yticklabels=GENRES, ax=axes[0],
     )
-    axes[0].set_title(f"Confusion ({split_name}) — counts")
+    axes[0].set_title(f"Confusion ({split_name}) - counts")
     axes[0].set_xlabel("Predicted")
     axes[0].set_ylabel("Actual")
 
@@ -185,7 +185,7 @@ def _plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_na
         cm_norm, annot=True, fmt=".2f", cmap="Blues", cbar=False, vmin=0, vmax=1,
         xticklabels=GENRES, yticklabels=GENRES, ax=axes[1],
     )
-    axes[1].set_title(f"Confusion ({split_name}) — row-normalized")
+    axes[1].set_title(f"Confusion ({split_name}) - row-normalized")
     axes[1].set_xlabel("Predicted")
     axes[1].set_ylabel("Actual")
 
@@ -227,7 +227,7 @@ def _plot_per_class_metrics(
 def _plot_predicted_vs_actual(
     y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_name: str
 ) -> None:
-    """Jittered scatter — every track is one point.
+    """Jittered scatter - every track is one point.
 
     Diagonal = correct, off-diagonal = error. This view tells you *which*
     classes are bleeding into which, on a per-track basis, in a way the

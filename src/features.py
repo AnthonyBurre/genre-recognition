@@ -1,6 +1,6 @@
 """Audio feature extraction with on-disk caching.
 
-Produces a fixed-length descriptor per clip — four-moment (mean, std, skew,
+Produces a fixed-length descriptor per clip - four-moment (mean, std, skew,
 kurtosis) summaries over time of MFCC + delta + delta-delta, chroma, tonnetz,
 spectral contrast, spectral centroid/bandwidth/rolloff, ZCR, and the onset
 envelope; plus scalar tempo and RMS statistics. Sklearn-style classifiers
@@ -45,13 +45,29 @@ class FeatureMatrix:
     track_ids: np.ndarray    # (n_tracks,)
     feature_names: list[str]
 
+    @classmethod
+    def empty(cls, manifest: pd.DataFrame) -> "FeatureMatrix":
+        """Zero-width matrix carrying labels and track ids only.
+
+        Used by ``train.py`` when a model declares ``requires_features=False``
+        - keeps the call site uniform (``model.fit(X, y)`` for everyone)
+        without paying the ~30-min cold-cache cost of real feature extraction.
+        """
+        n = len(manifest)
+        return cls(
+            X=np.empty((n, 0), dtype=np.float32),
+            y=manifest["label"].to_numpy(dtype=np.int64),
+            track_ids=manifest["track_id"].to_numpy(),
+            feature_names=[],
+        )
+
 
 def _summarize(name: str, values: np.ndarray) -> dict[str, float]:
     """Four-moment summary along the time axis.
 
     For 2D inputs we summarize each feature bin independently (so MFCC-20
     becomes 80 features, not 4). Skew and kurtosis are zeroed out where
-    the variance is degenerate (constant slice) — scipy returns NaN there.
+    the variance is degenerate (constant slice) - scipy returns NaN there.
     """
     out: dict[str, float] = {}
     if values.ndim == 1:
@@ -75,7 +91,7 @@ def _summarize(name: str, values: np.ndarray) -> dict[str, float]:
 @_memory.cache
 def _extract_one_v2(path: str, sr: int) -> dict[str, float]:
     """Cached single-clip extraction. The ``_v2`` suffix is the cache namespace
-    — bump it whenever the feature schema below changes so old caches are
+    - bump it whenever the feature schema below changes so old caches are
     cleanly orphaned rather than silently mixed with new ones."""
     import librosa  # imported lazily so the random baseline doesn't pay for it
 
@@ -92,15 +108,15 @@ def _features_from_audio(
 
     feats: dict[str, float] = {}
 
-    # Timbre — MFCCs and their first/second time derivatives.
+    # Timbre - MFCCs and their first/second time derivatives.
     mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=20)
     feats.update(_summarize("mfcc", mfcc))
     feats.update(_summarize("mfcc_d1", librosa.feature.delta(mfcc, order=1)))
     feats.update(_summarize("mfcc_d2", librosa.feature.delta(mfcc, order=2)))
 
-    # Tonality — chroma and tonnetz. Tonnetz is derived from the harmonic
+    # Tonality - chroma and tonnetz. Tonnetz is derived from the harmonic
     # component since percussion smears the chroma it relies on. Callers
-    # can pass a precomputed slice to skip the per-segment HPSS — used by
+    # can pass a precomputed slice to skip the per-segment HPSS - used by
     # the segment extractor, which computes HPSS once for the whole clip.
     chroma = librosa.feature.chroma_stft(y=audio, sr=sr)
     feats.update(_summarize("chroma", chroma))
@@ -109,7 +125,7 @@ def _features_from_audio(
     tonnetz = librosa.feature.tonnetz(y=harmonic, sr=sr)
     feats.update(_summarize("tonnetz", tonnetz))
 
-    # Spectral shape — contrast captures peak/valley energy across bands and
+    # Spectral shape - contrast captures peak/valley energy across bands and
     # is one of the strongest single descriptors for polyphonic vs.
     # percussive material on GTZAN.
     feats.update(_summarize("contrast", librosa.feature.spectral_contrast(y=audio, sr=sr)))
@@ -118,7 +134,7 @@ def _features_from_audio(
     feats.update(_summarize("rolloff", librosa.feature.spectral_rolloff(y=audio, sr=sr)[0]))
     feats.update(_summarize("zcr", librosa.feature.zero_crossing_rate(audio)[0]))
 
-    # Rhythm — tempo plus onset-envelope shape. We deliberately avoid the
+    # Rhythm - tempo plus onset-envelope shape. We deliberately avoid the
     # full tempogram (hundreds of lag bins) because feature-dim explosion
     # hurts the linear classifiers on a 1000-clip dataset.
     onset_env = librosa.onset.onset_strength(y=audio, sr=sr)
@@ -126,7 +142,7 @@ def _features_from_audio(
     tempo = librosa.feature.tempo(onset_envelope=onset_env, sr=sr)
     feats["tempo"] = float(np.atleast_1d(tempo)[0])
 
-    # Dynamics — RMS scalars complement the time-resolved spectral features.
+    # Dynamics - RMS scalars complement the time-resolved spectral features.
     rms = np.sqrt(np.mean(audio ** 2) + 1e-12)
     feats["rms_mean"] = float(rms)
     peak = float(np.max(np.abs(audio)) + 1e-12)
@@ -143,7 +159,7 @@ def extract(
     """Featurize every row in ``manifest`` (must have ``path`` and ``label``).
 
     With ``transform`` set, audio is loaded uncached, transformed, and
-    featurized fresh every call — appropriate for stochastic train-time
+    featurized fresh every call - appropriate for stochastic train-time
     augmentation where caching would defeat the purpose.
     """
     rows: list[dict[str, float]] = []
@@ -177,12 +193,12 @@ def _segment_features_from_audio(
     """Slide a window across ``audio`` and featurize each segment.
 
     HPSS is computed once on the full clip and the harmonic component is
-    sliced per segment — saves ~40% of segment-featurization wall time on
+    sliced per segment - saves ~40% of segment-featurization wall time on
     cold cache versus running HPSS independently per segment, with edge
     effects negligible relative to the 3 s segment length.
 
     If the clip is shorter than one segment, falls back to a single
-    whole-clip segment with index 0 — keeps the function total over any
+    whole-clip segment with index 0 - keeps the function total over any
     valid input.
     """
     import librosa
@@ -232,7 +248,7 @@ def extract_segments(
         column carrying its position within the parent clip.
 
     With ``transform`` set, audio is loaded uncached and transformed before
-    segmentation — augmentation must be stochastic per call to be useful.
+    segmentation - augmentation must be stochastic per call to be useful.
     """
     feat_rows: list[dict[str, float]] = []
     meta_rows: list[dict] = []

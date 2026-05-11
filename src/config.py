@@ -27,7 +27,7 @@ CLIP_DURATION_SEC = 30.0
 RANDOM_SEED = 42
 
 # Default stratified split. Held-out test set is locked once and never touched
-# during model selection — val is what we tune on.
+# during model selection - val is what we tune on.
 TRAIN_FRAC = 0.8
 VAL_FRAC = 0.1
 TEST_FRAC = 0.1
