@@ -72,6 +72,35 @@ per-segment, and averages probabilities per `track_id` for the headline
 metrics. Use it with `--augment default` (random gain, polarity inversion,
 gaussian noise, train-only) for a stronger model.
 
+## Results
+
+Validation-set numbers from the runs in `results/`. The split is
+seed-fixed and reproducible, so re-running yields the same metrics
+modulo `sklearn` non-determinism.
+
+| Model  | Split    | Segments | Val acc | Macro F1 | n_samples |
+| ------ | -------- | :------: | ------: | -------: | --------: |
+| random | naive    |    -     |   0.100 |    0.101 |       100 |
+| logreg | naive    |    -     |   0.760 |    0.761 |       100 |
+| logreg | filtered |    -     |   0.624 |    0.617 |        93 |
+| logreg | filtered |    ✓     |   0.753 |    0.748 |        93 |
+
+Two things to read off this:
+
+1. **Naive → filtered (–13.6 pp)** is GTZAN's documented leakage
+   (duplicates and artist/album overlap, Sturm 2013) being priced in.
+   The filtered-split number is what the model actually learns to
+   generalize.
+2. **Filtered + segments (+12.9 pp)** recovers nearly all of that
+   drop without leakage. Per-segment training gives the model ~10×
+   the data and within-track variance; soft-vote aggregation then
+   flips wrong segment-majorities to right at the track level (5
+   tracks rescued, 0 made worse on the run above).
+
+`svm_rbf` and `gbt` are wired in and pass the same call site but
+haven't been benchmarked here - `python -m src.train --model svm_rbf
+--split filtered --segments` is one command away.
+
 ## Project layout
 
 ```
@@ -93,8 +122,11 @@ src/
 
 ## Adding a new model
 
-1. Subclass `src.models.base.GenreClassifier` (set `requires_features` as
-   appropriate).
+1. Subclass `src.models.base.GenreClassifier`. The contract is sklearn-style:
+   `fit(X, y)`, `predict(X)`, optional `predict_proba(X)`. Set
+   `requires_features = False` only if your model can train without the
+   audio feature pipeline (it still receives a zero-width X carrying labels
+   and track ids).
 2. Register it in `src/models/__init__.py`.
 3. `python -m src.train --model <name>`.
 
