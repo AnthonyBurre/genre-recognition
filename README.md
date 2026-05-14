@@ -72,6 +72,29 @@ per-segment, and averages probabilities per `track_id` for the headline
 metrics. Use it with `--augment default` (random gain, polarity inversion,
 gaussian noise, train-only) for a stronger model.
 
+## Visualizing the feature set
+
+Before trusting the feature set in a model, look at it. `src/visualize.py`
+renders a 3D PCA scatter, one point per track, color-coded by genre:
+
+```bash
+python -m src.visualize                                  # pca3d, naive split, train fold
+python -m src.visualize --split filtered --fold all      # full dataset, filtered split
+```
+
+`--fold` takes `train` / `val` / `test` / `all` (`all` ignores `--split` and
+uses the full GTZAN index). Artifacts land in `results/visualizations/`:
+
+- `pca3d_<split>_<fold>.png` - static, fixed-angle render for run artifacts
+- `pca3d_<split>_<fold>.html` - interactive, rotatable; this is the one to
+  actually read cluster separation from
+
+Features are z-scored before PCA (the set mixes scales like tempo ~120 against
+near-zero MFCC moments). Tight per-genre clouds mean the features carry genre
+signal; one uniform blob means they don't - classical and metal should sit far
+apart, while rock/country/disco tend to overlap. Add another visualization by
+writing a `plot_*` function and registering it in `PLOT_REGISTRY`.
+
 ## Results
 
 Validation-set numbers from the runs in `results/`. The split is
@@ -117,6 +140,7 @@ src/
 │   ├── gbt.py            # histogram gradient boosting
 │   └── __init__.py       # name → constructor registry
 ├── evaluate.py           # metrics + plots + CSV + segment→track aggregation
+├── visualize.py          # exploratory feature-set plots (PCA), own CLI
 └── train.py              # CLI driver
 ```
 
@@ -140,6 +164,29 @@ PolarityInversion → AddGaussianNoise` sequence; `TimeStretch` and
 `PitchShift` are available but excluded by default - both can confuse genre
 cues (tempo for rhythm-heavy genres, key/timbre for classical/jazz).
 **Apply only to the training split** - val/test must stay clean.
+
+## Next steps
+
+Feature-set ideas not yet implemented, roughly in order of expected payoff
+per unit of effort:
+
+- **Beat-synchronous framing.** Aggregate the spectral/timbral features over
+  beat-aligned frames (`librosa.util.sync` against `librosa.beat.beat_track`)
+  instead of fixed-length frames. Makes the four-moment summaries
+  tempo-invariant, which should help the genres where tempo varies within a
+  class but timbre doesn't.
+- **Percussive-component features.** `_features_from_audio` already runs HPSS
+  to get the harmonic component for tonnetz - the percussive residual is
+  computed and thrown away. Summarizing it (or its onset envelope) is nearly
+  free and carries rhythm/attack signal the current set doesn't capture.
+- **Compact rhythm descriptor.** We deliberately skip the full tempogram for
+  feature-dim reasons (`features.py:137-139`). A low-dimensional middle
+  ground - a coarse beat histogram, or tempogram-ratio features - would add
+  rhythm structure without the dim explosion that hurts the linear models.
+- **Log-mel spectrogram extractor.** A second extractor producing frame-level
+  log-mel spectrograms (already foreshadowed in the `features.py` module
+  docstring) would unlock a CNN model behind the existing
+  `requires_features` contract.
 
 ## GTZAN caveats
 
