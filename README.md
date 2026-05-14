@@ -1,10 +1,10 @@
 # genre-recognition
 
-Music genre classification on the GTZAN dataset. Ships a stratified random
-baseline plus three classical models (logistic regression, RBF-SVM, gradient
-boosting) on a four-moment summary of MFCC+deltas, chroma, tonnetz, spectral
-contrast, spectral shape, ZCR, onset envelope, tempo, and dynamics. Optional
-fault-filtered split (dedup + pseudo-artist grouping) and segment-level
+Music genre classification on the **GTZAN** and **FMA small** datasets. Ships
+a stratified random baseline plus three classical models (logistic
+regression, RBF-SVM, gradient boosting) on a four-moment summary of
+MFCC+deltas, chroma, tonnetz, spectral contrast, spectral shape, ZCR, onset
+envelope, tempo, and dynamics. Optional fault-filtered split and segment-level
 training with track-level aggregation are available behind CLI flags.
 
 ## Setup
@@ -15,30 +15,44 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Fetch GTZAN (streams the ~1.2 GB `genres.tar.gz` from the `marsyas/gtzan`
-Hugging Face mirror directly via `urllib`. The tarball lands in a temp
-file under `data/raw/`, gets extracted, and is deleted):
+## Datasets
+
+The dataset is selected with `--dataset` (default `gtzan`) on every CLI. Each
+dataset has its own genre vocabulary, on-disk layout under `data/raw/`, and
+split files under `data/splits/<dataset>/`.
+
+| Dataset     | Genres | Clips  | Notes                                                        |
+| ----------- | -----: | -----: | ------------------------------------------------------------ |
+| `gtzan`     |     10 |  1,000 | 30s mono WAV @ 22050 Hz. Tiny, fast to iterate on.           |
+| `fma_small` |      8 |  8,000 | 30s MP3, Creative-Commons, ships real artist ids. 8× GTZAN.  |
+
+Fetch a dataset (idempotent; re-running is a no-op once the audio is on disk,
+`--force` redownloads):
 
 ```bash
-python -m src.data --download
+python -m src.data --dataset gtzan --download       # ~1.2 GB genres.tar.gz from the marsyas/gtzan HF mirror
+python -m src.data --dataset fma_small --download   # ~7.5 GB: fma_small.zip + fma_metadata.zip from os.unil.ch
 ```
 
-The resulting layout is `data/raw/genres_original/<genre>/<genre>.NNNNN.wav`
-across 10 genres (blues, classical, country, disco, hiphop, jazz, metal,
-pop, reggae, rock - 100 tracks each, 30s mono at 22050 Hz). Re-running is
-a no-op once all 10×100 wavs are on disk; pass `--force` to redownload.
+GTZAN lands at `data/raw/genres_original/<genre>/<genre>.NNNNN.wav`; FMA at
+`data/raw/fma_small/fma_small/<prefix>/<id>.mp3` with metadata in
+`data/raw/fma_small/fma_metadata/tracks.csv`. MP3 decoding goes through
+`librosa` — if your installed `libsndfile` predates MP3 support you may also
+need `ffmpeg` on `PATH` (the `audioread` fallback uses it).
 
 ## Run
 
 ```bash
-python -m src.train --model logreg                            # classical baseline
+python -m src.train --model logreg                            # classical baseline (GTZAN)
 python -m src.train --model svm_rbf --augment default         # SVM + train-only augmentation
 python -m src.train --model gbt --segments                    # segment-level training, track-aggregated metrics
 python -m src.train --model logreg --split filtered           # honest, leakage-controlled split
+python -m src.train --model logreg --dataset fma_small        # train on FMA small instead of GTZAN
 ```
 
-Available models: `random`, `logreg`, `svm_rbf`, `gbt`. Artifacts land in
-`results/<run-name>/`:
+Available models: `random`, `logreg`, `svm_rbf`, `gbt`. Add `--dataset
+fma_small` to any command to run on FMA instead of GTZAN. Artifacts land in
+`results/<run-name>/` (run name defaults to `<dataset>-<model>-<timestamp>`):
 
 - `confusion_val.png` - count + row-normalized confusion matrices
 - `per_class_val.png` - precision / recall / F1 per genre
@@ -52,18 +66,23 @@ avoid test-set leakage during model iteration.
 
 ### Fault-filtered split
 
-GTZAN's known duplicates and artist/album leakage inflate accuracy. Build
-the leakage-controlled split once, then opt into it via `--split filtered`:
+Duplicates and artist/album leakage inflate accuracy. Build the
+leakage-controlled split once, then opt into it via `--split filtered`:
 
 ```bash
-python -m src.data --build-filtered-split   # one-time, prints per-genre group counts
+python -m src.data --build-filtered-split                      # GTZAN, one-time
+python -m src.data --dataset fma_small --build-filtered-split  # FMA, one-time
 python -m src.train --model logreg --split filtered
 ```
 
-The filtered builder drops near-duplicates and clusters tracks within each
-genre into pseudo-artist groups (cosine distance on MFCC means), then assigns
-whole groups to train/val/test so no group spans folds. Numbers will drop
-5–15 pp; they're more honest.
+The grouping strategy depends on the dataset, but either way whole groups are
+assigned to train/val/test so no group spans folds:
+
+- **GTZAN** has no artist metadata, so the builder drops near-duplicates and
+  clusters tracks within each genre into *pseudo-artist* groups (cosine
+  distance on MFCC means). Numbers will drop 5–15 pp; they're more honest.
+- **FMA small** ships real artist ids in `tracks.csv`, so the builder groups
+  by *true artist* directly — no dedup heuristic needed.
 
 ### Segments + augmentation
 
@@ -78,12 +97,14 @@ Before trusting the feature set in a model, look at it. `src/visualize.py`
 renders a 3D PCA scatter, one point per track, color-coded by genre:
 
 ```bash
-python -m src.visualize                                  # pca3d, naive split, train fold
-python -m src.visualize --split filtered --fold all      # full dataset, filtered split
+python -m src.visualize                                       # pca3d, naive split, train fold
+python -m src.visualize --split filtered --fold all           # full dataset, filtered split
+python -m src.visualize --dataset fma_small --fold all        # FMA feature set
 ```
 
 `--fold` takes `train` / `val` / `test` / `all` (`all` ignores `--split` and
-uses the full GTZAN index). Artifacts land in `results/visualizations/`:
+uses the full dataset index). `--dataset` selects the dataset as elsewhere.
+Artifacts land in `results/visualizations/`:
 
 - `pca3d_<split>_<fold>.png` - static, fixed-angle render for run artifacts
 - `pca3d_<split>_<fold>.html` - interactive, rotatable; this is the one to
@@ -128,8 +149,8 @@ haven't been benchmarked here - `python -m src.train --model svm_rbf
 
 ```
 src/
-├── config.py             # genres, sample rate, paths, seed
-├── data.py               # GTZAN indexer + naive and fault-filtered splits
+├── config.py             # Dataset descriptors (genres, layout), paths, seed
+├── data.py               # GTZAN + FMA indexers, downloaders, naive and fault-filtered splits
 ├── features.py           # 4-moment feature summary + segment extractor, joblib-cached
 ├── augment.py            # waveform transforms + Compose + default chain
 ├── models/
@@ -188,11 +209,18 @@ per unit of effort:
   docstring) would unlock a CNN model behind the existing
   `requires_features` contract.
 
-## GTZAN caveats
+## Dataset caveats
 
-The dataset is known to contain duplicate clips, mislabelings, and
-artist/album leakage that inflate naive accuracies (Sturm 2013, Kereliuk
-2015). One known-corrupt file (`jazz.00054.wav`) is dropped at the indexer
-level; the fault-filtered split (`--split filtered`) handles the duplicates
-and pseudo-artist grouping. For headline numbers worth quoting, train and
+**GTZAN** is known to contain duplicate clips, mislabelings, and artist/album
+leakage that inflate naive accuracies (Sturm 2013, Kereliuk 2015). One
+known-corrupt file (`jazz.00054.wav`) is dropped at the indexer level; the
+fault-filtered split (`--split filtered`) handles the duplicates and
+pseudo-artist grouping. For headline numbers worth quoting, train and
 evaluate on the filtered split.
+
+**FMA small** is larger (8× the clips) and Creative-Commons licensed, with
+real artist ids that make the filtered split exact rather than heuristic. A
+handful of corrupt/truncated mp3s are dropped at the indexer level. It is the
+better choice when scale matters; GTZAN remains the fast smoke-test default.
+`fma_medium` (25k clips, 16 unbalanced genres) is a natural next step but is
+not wired in — it would need unbalanced-aware splitting.

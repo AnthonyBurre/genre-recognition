@@ -1,9 +1,9 @@
 """Base contract every genre classifier must satisfy.
 
 Standard sklearn-style: ``fit(X, y)``, ``predict(X)``, optional
-``predict_proba(X)``. Predictions are class indices ordered by
-``config.GENRES``; probability matrices are shape ``(n_samples, n_classes)``
-in the same order.
+``predict_proba(X)``. Predictions are class indices ordered by the active
+dataset's genre list (``Dataset.genres``); probability matrices are shape
+``(n_samples, n_classes)`` in the same order.
 
 The ``requires_features`` class attribute tells ``train.py`` whether to run
 the (slow) feature pipeline for this model. When ``False`` (e.g. the

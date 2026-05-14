@@ -11,8 +11,8 @@ with its own ``python -m src.visualize`` CLI, rather than a flag on the
 training driver - exploration happens off to the side of a run.
 
 Adding another visualization is a few lines: write a ``plot_*`` function with
-the ``(fm, out_dir, tag) -> None`` signature and add it to ``PLOT_REGISTRY``.
-The CLI picks it up automatically.
+the ``(fm, out_dir, tag, genres) -> None`` signature and add it to
+``PLOT_REGISTRY``. The CLI picks it up automatically.
 """
 import argparse
 from pathlib import Path
@@ -24,13 +24,13 @@ from sklearn.preprocessing import StandardScaler
 
 from . import data as data_mod
 from . import features as features_mod
-from .config import GENRES, RANDOM_SEED, RESULTS_DIR
+from .config import DATASETS, DEFAULT_DATASET, RANDOM_SEED, RESULTS_DIR, Dataset, get_dataset
 from .features import FeatureMatrix
 
-# One fixed genre -> color map, used by every plot here, so visualizations
-# stay comparable the same way ``config.GENRES`` fixes class ordering. The
-# first two entries are the accent colors already used in ``evaluate.py``.
-GENRE_COLORS: dict[str, str] = {
+# Hand-picked accent colors for GTZAN's 10 genres - the first two match the
+# accent colors used in ``evaluate.py``. Other datasets fall back to a
+# qualitative colormap (see ``_genre_colors``).
+_GTZAN_GENRE_COLORS: dict[str, str] = {
     "blues": "#2a9d8f",
     "classical": "#e76f51",
     "country": "#e9c46a",
@@ -44,22 +44,40 @@ GENRE_COLORS: dict[str, str] = {
 }
 
 
-def _load_features(split: str, fold: str) -> FeatureMatrix:
+def _genre_colors(genres: tuple[str, ...]) -> dict[str, str]:
+    """A fixed genre -> color map for the given genre list.
+
+    Uses the hand-picked GTZAN palette when every genre is covered by it;
+    otherwise derives position-based colors from a qualitative colormap so
+    any dataset's genre vocabulary renders consistently.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_hex
+
+    if all(g in _GTZAN_GENRE_COLORS for g in genres):
+        return {g: _GTZAN_GENRE_COLORS[g] for g in genres}
+    cmap = plt.get_cmap("tab10" if len(genres) <= 10 else "tab20")
+    return {g: to_hex(cmap(i % cmap.N)) for i, g in enumerate(genres)}
+
+
+def _load_features(dataset: Dataset, split: str, fold: str) -> FeatureMatrix:
     """Featurize the requested data slice.
 
-    ``fold="all"`` featurizes the full GTZAN index; otherwise the named fold
-    of the requested split variant. Extraction is joblib-cached, so the first
-    call is slow and every call after is fast.
+    ``fold="all"`` featurizes the full dataset index; otherwise the named
+    fold of the requested split variant. Extraction is joblib-cached, so the
+    first call is slow and every call after is fast.
     """
     if fold == "all":
-        manifest = data_mod.build_index()
+        manifest = data_mod.build_index(dataset)
     else:
-        split_obj = data_mod.get_or_build_split(variant=split)
+        split_obj = data_mod.get_or_build_split(dataset, variant=split)
         manifest = getattr(split_obj, fold)
-    return features_mod.extract(manifest, desc=f"features:{split}:{fold}")
+    return features_mod.extract(manifest, sr=dataset.sample_rate, desc=f"features:{split}:{fold}")
 
 
-def plot_pca3d(fm: FeatureMatrix, out_dir: Path, tag: str) -> None:
+def plot_pca3d(
+    fm: FeatureMatrix, out_dir: Path, tag: str, genres: tuple[str, ...],
+) -> None:
     """3D PCA scatter, one point per track, colored by genre.
 
     Features are z-scored before PCA - the set mixes wildly different scales
@@ -73,7 +91,8 @@ def plot_pca3d(fm: FeatureMatrix, out_dir: Path, tag: str) -> None:
     pca = PCA(n_components=3, random_state=RANDOM_SEED)
     coords = pca.fit_transform(Xz)
     evr = pca.explained_variance_ratio_
-    genres = np.array([GENRES[int(i)] for i in fm.y])
+    genre_labels = np.array([genres[int(i)] for i in fm.y])
+    genre_colors = _genre_colors(genres)
 
     axis_labels = [f"PC{i + 1} ({evr[i] * 100:.1f}%)" for i in range(3)]
     title = (
@@ -87,13 +106,13 @@ def plot_pca3d(fm: FeatureMatrix, out_dir: Path, tag: str) -> None:
 
     fig = plt.figure(figsize=(10, 9))
     ax = fig.add_subplot(111, projection="3d")
-    for genre in GENRES:
-        mask = genres == genre
+    for genre in genres:
+        mask = genre_labels == genre
         if not mask.any():
             continue
         ax.scatter(
             coords[mask, 0], coords[mask, 1], coords[mask, 2],
-            s=22, alpha=0.75, color=GENRE_COLORS[genre], label=genre,
+            s=22, alpha=0.75, color=genre_colors[genre], label=genre,
         )
     ax.set_xlabel(axis_labels[0])
     ax.set_ylabel(axis_labels[1])
@@ -113,13 +132,13 @@ def plot_pca3d(fm: FeatureMatrix, out_dir: Path, tag: str) -> None:
         "PC1": coords[:, 0],
         "PC2": coords[:, 1],
         "PC3": coords[:, 2],
-        "genre": genres,
+        "genre": genre_labels,
         "track_id": fm.track_ids,
     }
     plot_fig = px.scatter_3d(
         plot_df, x="PC1", y="PC2", z="PC3",
-        color="genre", color_discrete_map=GENRE_COLORS,
-        category_orders={"genre": list(GENRES)},
+        color="genre", color_discrete_map=genre_colors,
+        category_orders={"genre": list(genres)},
         hover_data=["track_id"], title=title,
     )
     plot_fig.update_traces(marker=dict(size=4, opacity=0.8))
@@ -136,7 +155,7 @@ def plot_pca3d(fm: FeatureMatrix, out_dir: Path, tag: str) -> None:
 
 # name -> plot function. Adding a visualization = add a function above and an
 # entry here; the CLI's --plot choices derive from this dict.
-PLOT_REGISTRY: dict[str, Callable[[FeatureMatrix, Path, str], None]] = {
+PLOT_REGISTRY: dict[str, Callable[[FeatureMatrix, Path, str, tuple[str, ...]], None]] = {
     "pca3d": plot_pca3d,
 }
 
@@ -147,24 +166,27 @@ def _main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--plot", default="pca3d", choices=sorted(PLOT_REGISTRY),
                         help="Which visualization to render.")
+    parser.add_argument("--dataset", default=DEFAULT_DATASET, choices=sorted(DATASETS),
+                        help="Which dataset to visualize.")
     parser.add_argument("--split", default="naive", choices=["naive", "filtered"],
                         help="Split variant to draw the fold from. Ignored when "
                              "--fold all.")
     parser.add_argument("--fold", default="train",
                         choices=["train", "val", "test", "all"],
                         help="Which data slice to visualize. 'all' uses the full "
-                             "GTZAN index regardless of --split.")
+                             "dataset index regardless of --split.")
     parser.add_argument("--out-dir", default=None,
                         help="Output directory. Defaults to results/visualizations/.")
     args = parser.parse_args(argv)
 
+    dataset = get_dataset(args.dataset)
     out_dir = Path(args.out_dir) if args.out_dir else RESULTS_DIR / "visualizations"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tag = f"{args.split}_{args.fold}" if args.fold != "all" else "all"
-    fm = _load_features(args.split, args.fold)
+    tag = f"{dataset.name}_{args.split}_{args.fold}" if args.fold != "all" else f"{dataset.name}_all"
+    fm = _load_features(dataset, args.split, args.fold)
     print(f"[visualize] {args.plot} on {len(fm.y)} tracks ({tag})")
-    PLOT_REGISTRY[args.plot](fm, out_dir, tag)
+    PLOT_REGISTRY[args.plot](fm, out_dir, tag, dataset.genres)
     return 0
 
 

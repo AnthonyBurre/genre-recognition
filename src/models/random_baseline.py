@@ -9,7 +9,7 @@ This is the floor every real model must beat.
 """
 import numpy as np
 
-from ..config import GENRES, RANDOM_SEED
+from ..config import RANDOM_SEED
 from .base import GenreClassifier
 
 
@@ -23,7 +23,9 @@ class StratifiedRandomClassifier(GenreClassifier):
         self._rng = np.random.default_rng(seed)
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "StratifiedRandomClassifier":
-        n_classes = len(GENRES)
+        # Class count comes from the labels themselves, so the baseline adapts
+        # to whatever dataset it's handed (GTZAN's 10 genres, FMA's 8, ...).
+        n_classes = int(y.astype(np.int64).max()) + 1
         counts = np.bincount(y.astype(np.int64), minlength=n_classes)
         self.class_priors_ = counts / counts.sum()
         return self
@@ -35,7 +37,7 @@ class StratifiedRandomClassifier(GenreClassifier):
     def predict(self, X: np.ndarray) -> np.ndarray:
         self._check_fitted()
         n = X.shape[0]
-        return self._rng.choice(len(GENRES), size=n, p=self.class_priors_)
+        return self._rng.choice(len(self.class_priors_), size=n, p=self.class_priors_)
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """Return the class prior tiled per-sample.

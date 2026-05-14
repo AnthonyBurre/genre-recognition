@@ -26,8 +26,6 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
 )
 
-from .config import GENRES
-
 
 @dataclass
 class EvalSummary:
@@ -43,6 +41,7 @@ def aggregate_track_predictions(
     seg_manifest: pd.DataFrame,
     y_pred: np.ndarray,
     y_proba: Optional[np.ndarray],
+    n_classes: int,
 ) -> tuple[pd.DataFrame, np.ndarray, Optional[np.ndarray]]:
     """Collapse segment-level predictions to one prediction per track.
 
@@ -69,7 +68,6 @@ def aggregate_track_predictions(
     )
 
     seg_track = seg_manifest["track_id"].to_numpy()
-    n_classes = len(GENRES)
     n_tracks = len(track_ids_in_order)
 
     track_y_pred = np.empty(n_tracks, dtype=np.int64)
@@ -98,6 +96,7 @@ def evaluate(
     y_pred: np.ndarray,
     y_proba: Optional[np.ndarray],
     out_dir: Path,
+    genres: tuple[str, ...],
 ) -> EvalSummary:
     """Compute metrics, save plots + CSV, and return a JSON-friendly summary.
 
@@ -116,9 +115,10 @@ def evaluate(
         _save_predictions_csv(
             manifest, y_pred, y_proba,
             out_dir / f"predictions_segments_{split_name}.csv",
+            genres,
         )
         eval_manifest, eval_y_pred, eval_y_proba = aggregate_track_predictions(
-            manifest, y_pred, y_proba,
+            manifest, y_pred, y_proba, len(genres),
         )
     else:
         eval_manifest = manifest
@@ -139,13 +139,14 @@ def evaluate(
     _save_predictions_csv(
         eval_manifest, eval_y_pred, eval_y_proba,
         out_dir / f"predictions_{split_name}.csv",
+        genres,
     )
-    _plot_confusion(y_true, eval_y_pred, out_dir / f"confusion_{split_name}.png", split_name)
-    _plot_per_class_metrics(y_true, eval_y_pred, out_dir / f"per_class_{split_name}.png", split_name)
-    _plot_predicted_vs_actual(y_true, eval_y_pred, out_dir / f"pred_vs_actual_{split_name}.png", split_name)
+    _plot_confusion(y_true, eval_y_pred, out_dir / f"confusion_{split_name}.png", split_name, genres)
+    _plot_per_class_metrics(y_true, eval_y_pred, out_dir / f"per_class_{split_name}.png", split_name, genres)
+    _plot_predicted_vs_actual(y_true, eval_y_pred, out_dir / f"pred_vs_actual_{split_name}.png", split_name, genres)
 
     report = classification_report(
-        y_true, eval_y_pred, target_names=list(GENRES), zero_division=0, output_dict=True
+        y_true, eval_y_pred, target_names=list(genres), zero_division=0, output_dict=True
     )
     (out_dir / f"classification_report_{split_name}.json").write_text(json.dumps(report, indent=2))
     (out_dir / f"summary_{split_name}.json").write_text(json.dumps(asdict(summary), indent=2))
@@ -157,25 +158,29 @@ def _save_predictions_csv(
     y_pred: np.ndarray,
     y_proba: Optional[np.ndarray],
     path: Path,
+    genres: tuple[str, ...],
 ) -> None:
     df = manifest[["track_id", "path", "genre", "label"]].copy()
     df["pred_label"] = y_pred
-    df["pred_genre"] = [GENRES[int(i)] for i in y_pred]
+    df["pred_genre"] = [genres[int(i)] for i in y_pred]
     df["correct"] = df["label"] == df["pred_label"]
     if y_proba is not None:
-        for i, g in enumerate(GENRES):
+        for i, g in enumerate(genres):
             df[f"p_{g}"] = y_proba[:, i]
     df.to_csv(path, index=False)
 
 
-def _plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_name: str) -> None:
-    cm = confusion_matrix(y_true, y_pred, labels=list(range(len(GENRES))))
+def _plot_confusion(
+    y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_name: str,
+    genres: tuple[str, ...],
+) -> None:
+    cm = confusion_matrix(y_true, y_pred, labels=list(range(len(genres))))
     cm_norm = cm.astype(float) / np.clip(cm.sum(axis=1, keepdims=True), 1, None)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     sns.heatmap(
         cm, annot=True, fmt="d", cmap="Blues", cbar=False,
-        xticklabels=GENRES, yticklabels=GENRES, ax=axes[0],
+        xticklabels=genres, yticklabels=genres, ax=axes[0],
     )
     axes[0].set_title(f"Confusion ({split_name}) - counts")
     axes[0].set_xlabel("Predicted")
@@ -183,7 +188,7 @@ def _plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_na
 
     sns.heatmap(
         cm_norm, annot=True, fmt=".2f", cmap="Blues", cbar=False, vmin=0, vmax=1,
-        xticklabels=GENRES, yticklabels=GENRES, ax=axes[1],
+        xticklabels=genres, yticklabels=genres, ax=axes[1],
     )
     axes[1].set_title(f"Confusion ({split_name}) - row-normalized")
     axes[1].set_xlabel("Predicted")
@@ -197,13 +202,14 @@ def _plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_na
 
 
 def _plot_per_class_metrics(
-    y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_name: str
+    y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_name: str,
+    genres: tuple[str, ...],
 ) -> None:
     precision, recall, f1, support = precision_recall_fscore_support(
-        y_true, y_pred, labels=list(range(len(GENRES))), zero_division=0
+        y_true, y_pred, labels=list(range(len(genres))), zero_division=0
     )
     df = pd.DataFrame({
-        "genre": list(GENRES),
+        "genre": list(genres),
         "precision": precision,
         "recall": recall,
         "f1": f1,
@@ -225,7 +231,8 @@ def _plot_per_class_metrics(
 
 
 def _plot_predicted_vs_actual(
-    y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_name: str
+    y_true: np.ndarray, y_pred: np.ndarray, path: Path, split_name: str,
+    genres: tuple[str, ...],
 ) -> None:
     """Jittered scatter - every track is one point.
 
@@ -242,14 +249,14 @@ def _plot_predicted_vs_actual(
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.scatter(x[correct], y[correct], s=22, alpha=0.7, color="#2a9d8f", label="correct")
     ax.scatter(x[~correct], y[~correct], s=22, alpha=0.7, color="#e76f51", label="incorrect")
-    lim = (-0.5, len(GENRES) - 0.5)
+    lim = (-0.5, len(genres) - 0.5)
     ax.plot(lim, lim, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
     ax.set_xlim(lim)
     ax.set_ylim(lim)
-    ax.set_xticks(range(len(GENRES)))
-    ax.set_yticks(range(len(GENRES)))
-    ax.set_xticklabels(GENRES, rotation=45)
-    ax.set_yticklabels(GENRES)
+    ax.set_xticks(range(len(genres)))
+    ax.set_yticks(range(len(genres)))
+    ax.set_xticklabels(genres, rotation=45)
+    ax.set_yticklabels(genres)
     ax.set_xlabel("Actual genre")
     ax.set_ylabel("Predicted genre")
     ax.set_title(f"Predicted vs. actual ({split_name})")
