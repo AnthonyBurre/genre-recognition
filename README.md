@@ -8,11 +8,16 @@ training with track-level aggregation are available behind CLI flags.
 
 ## Setup
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install it
+([instructions](https://docs.astral.sh/uv/getting-started/installation/)),
+then:
+
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
+
+That resolves the lockfile and creates `.venv/`. Prefix commands with `uv run`
+(shown below) or `source .venv/bin/activate` once and drop the prefix.
 
 ## Datasets
 
@@ -29,8 +34,8 @@ Fetch a dataset (idempotent; re-running is a no-op once the audio is on disk,
 `--force` redownloads):
 
 ```bash
-python -m src.data --dataset gtzan --download       # ~1.2 GB genres.tar.gz from the marsyas/gtzan HF mirror
-python -m src.data --dataset fma_small --download   # ~7.5 GB: fma_small.zip + fma_metadata.zip from os.unil.cloud.switch.ch
+uv run python -m src.data --dataset gtzan --download       # ~1.2 GB genres.tar.gz from the marsyas/gtzan HF mirror
+uv run python -m src.data --dataset fma_small --download   # ~7.5 GB: fma_small.zip + fma_metadata.zip from os.unil.cloud.switch.ch
 ```
 
 GTZAN lands at `data/raw/genres_original/<genre>/<genre>.NNNNN.wav`; FMA at
@@ -42,11 +47,11 @@ need `ffmpeg` on `PATH` (the `audioread` fallback uses it).
 ## Run
 
 ```bash
-python -m src.train --model logreg                            # classical baseline (GTZAN)
-python -m src.train --model svm_rbf --augment default         # SVM + train-only augmentation
-python -m src.train --model gbt --segments                    # segment-level training, track-aggregated metrics
-python -m src.train --model logreg --split filtered           # honest, leakage-controlled split
-python -m src.train --model logreg --dataset fma_small        # train on FMA small instead of GTZAN
+uv run python -m src.train --model logreg                            # classical baseline (GTZAN)
+uv run python -m src.train --model svm_rbf --augment default         # SVM + train-only augmentation
+uv run python -m src.train --model gbt --segments                    # segment-level training, track-aggregated metrics
+uv run python -m src.train --model logreg --split filtered           # honest, leakage-controlled split
+uv run python -m src.train --model logreg --dataset fma_small        # train on FMA small instead of GTZAN
 ```
 
 Available models: `random`, `logreg`, `svm_rbf`, `gbt`. Add `--dataset
@@ -69,9 +74,9 @@ Duplicates and artist/album leakage inflate accuracy. Build the
 leakage-controlled split once, then opt into it via `--split filtered`:
 
 ```bash
-python -m src.data --build-filtered-split                      # GTZAN, one-time
-python -m src.data --dataset fma_small --build-filtered-split  # FMA, one-time
-python -m src.train --model logreg --split filtered
+uv run python -m src.data --build-filtered-split                      # GTZAN, one-time
+uv run python -m src.data --dataset fma_small --build-filtered-split  # FMA, one-time
+uv run python -m src.train --model logreg --split filtered
 ```
 
 The grouping strategy depends on the dataset, but either way whole groups are
@@ -96,9 +101,9 @@ Before trusting the feature set in a model, look at it. `src/visualize.py`
 renders a 3D PCA scatter, one point per track, color-coded by genre:
 
 ```bash
-python -m src.visualize                                       # pca3d, naive split, train fold
-python -m src.visualize --split filtered --fold all           # full dataset, filtered split
-python -m src.visualize --dataset fma_small --fold all        # FMA feature set
+uv run python -m src.visualize                                       # pca3d, naive split, train fold
+uv run python -m src.visualize --split filtered --fold all           # full dataset, filtered split
+uv run python -m src.visualize --dataset fma_small --fold all        # FMA feature set
 ```
 
 `--fold` takes `train` / `val` / `test` / `all` (`all` ignores `--split` and
@@ -208,7 +213,7 @@ src/
    audio feature pipeline (it still receives a zero-width X carrying labels
    and track ids).
 2. Register it in `src/models/__init__.py`.
-3. `python -m src.train --model <name>`.
+3. `uv run python -m src.train --model <name>`.
 
 ## Adding augmentation
 
