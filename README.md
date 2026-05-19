@@ -1,7 +1,6 @@
-# genre-recognition
+# Music Genre Recognition
 
-Music genre classification on the **GTZAN** and **FMA small** datasets. Ships
-a stratified random baseline plus three classical models (logistic
+Music genre classification on the **GTZAN** and **FMA small** datasets. Ships a stratified random baseline plus three classical models (logistic
 regression, RBF-SVM, gradient boosting) on a four-moment summary of
 MFCC+deltas, chroma, tonnetz, spectral contrast, spectral shape, ZCR, onset
 envelope, tempo, and dynamics. Optional fault-filtered split and segment-level
@@ -31,7 +30,7 @@ Fetch a dataset (idempotent; re-running is a no-op once the audio is on disk,
 
 ```bash
 python -m src.data --dataset gtzan --download       # ~1.2 GB genres.tar.gz from the marsyas/gtzan HF mirror
-python -m src.data --dataset fma_small --download   # ~7.5 GB: fma_small.zip + fma_metadata.zip from os.unil.ch
+python -m src.data --dataset fma_small --download   # ~7.5 GB: fma_small.zip + fma_metadata.zip from os.unil.cloud.switch.ch
 ```
 
 GTZAN lands at `data/raw/genres_original/<genre>/<genre>.NNNNN.wav`; FMA at
@@ -118,32 +117,68 @@ writing a `plot_*` function and registering it in `PLOT_REGISTRY`.
 
 ## Results
 
-Validation-set numbers from the runs in `results/`. The split is
-seed-fixed and reproducible, so re-running yields the same metrics
+Validation-set numbers from the runs in `results/`. The split is seed-fixed and reproducible, so re-running yields the same metrics
 modulo `sklearn` non-determinism.
 
-| Model  | Split    | Segments | Val acc | Macro F1 | n_samples |
-| ------ | -------- | :------: | ------: | -------: | --------: |
-| random | naive    |    -     |   0.100 |    0.101 |       100 |
-| logreg | naive    |    -     |   0.760 |    0.761 |       100 |
-| logreg | filtered |    -     |   0.624 |    0.617 |        93 |
-| logreg | filtered |    ✓     |   0.753 |    0.748 |        93 |
+| Dataset     | Model     | Split    | Segments | Val acc | Macro F1 | n_samples |
+| ----------- | --------- | -------- | :------: | ------: | -------: | --------: |
+| `gtzan`     | random    | naive    |    -     |   0.100 |    0.101 |       100 |
+| `gtzan`     | logreg    | naive    |    -     |   0.760 |    0.761 |       100 |
+| `gtzan`     | svm_rbf   | naive    |    -     |   0.750 |    0.745 |       100 |
+| `gtzan`     | gbt       | naive    |    -     |   0.740 |    0.739 |       100 |
+| `gtzan`     | logreg    | filtered |    -     |   0.624 |    0.617 |        93 |
+| `gtzan`     | svm_rbf   | filtered |    -     |   0.677 |    0.667 |        93 |
+| `gtzan`     | gbt       | filtered |    -     |   0.656 |    0.635 |        93 |
+| `gtzan`     | logreg    | filtered |    ✓     |   0.753 |    0.748 |        93 |
+| `gtzan`     | svm_rbf   | filtered |    ✓     |   0.753 |    0.753 |        93 |
+| `gtzan`     | gbt       | filtered |    ✓     |   0.699 |    0.691 |        93 |
+| `fma_small` | random    | naive    |    -     |   0.122 |    0.122 |       800 |
+| `fma_small` | logreg    | naive    |    -     |   0.513 |    0.511 |       800 |
+| `fma_small` | svm_rbf   | naive    |    -     |   0.575 |    0.573 |       800 |
+| `fma_small` | gbt       | naive    |    -     |   0.629 |    0.628 |       800 |
+| `fma_small` | logreg    | filtered |    -     |   0.463 |    0.454 |       800 |
+| `fma_small` | svm_rbf   | filtered |    -     |   0.487 |    0.487 |       800 |
+| `fma_small` | gbt       | filtered |    -     |   0.524 |    0.518 |       800 |
+| `fma_small` | logreg    | filtered |    ✓     |   0.500 |    0.487 |       800 |
+| `fma_small` | svm_rbf   | filtered |    ✓     |   n/a † |    n/a † |       800 |
+| `fma_small` | gbt       | filtered |    ✓     |   0.554 |    0.545 |       800 |
 
-Two things to read off this:
+† `svm_rbf` + segments on FMA is impractical to fit: sklearn's libsvm is
+between O(n²) and O(n³), and with `probability=True` the internal 5-fold CV
+for Platt scaling roughly 6× that — projected 1–4 h for the ~120k segment
+training set. Not run.
 
-1. **Naive → filtered (–13.6 pp)** is GTZAN's documented leakage
-   (duplicates and artist/album overlap, Sturm 2013) being priced in.
-   The filtered-split number is what the model actually learns to
-   generalize.
-2. **Filtered + segments (+12.9 pp)** recovers nearly all of that
-   drop without leakage. Per-segment training gives the model ~10×
-   the data and within-track variance; soft-vote aggregation then
-   flips wrong segment-majorities to right at the track level (5
-   tracks rescued, 0 made worse on the run above).
+Reading across the two datasets:
 
-`svm_rbf` and `gbt` are wired in and pass the same call site but
-haven't been benchmarked here - `python -m src.train --model svm_rbf
---split filtered --segments` is one command away.
+1. **GTZAN naive is optimistic.** 0.760 looks strong, but the naive →
+   filtered drop (–13.6 pp) is GTZAN's documented leakage (duplicates
+   and artist/album overlap, Sturm 2013) being priced out. The filtered
+   number is what the model actually generalizes to.
+2. **FMA naive (0.513) is much lower than GTZAN naive (0.760)** — and
+   that is the point. FMA is 8× larger, drawn from a far broader pool of
+   artists, and Creative-Commons curated; 0.513 on 8 genres (vs. a 0.122
+   random floor) is a *harder, more honest* number than GTZAN's leaky
+   0.760. The gap is the dataset, not the model.
+3. **FMA's naive → filtered drop is only ~5 pp** (0.513 → 0.463), vs.
+   GTZAN's ~14 pp. Less leakage to subtract: FMA is curated and the
+   filtered split groups by *real* artist ids, while GTZAN's filtered
+   split has to approximate artist groups from MFCC clusters.
+4. **Segments help GTZAN much more than FMA** (+12.9 pp vs. +3.7 pp on
+   the filtered split). On GTZAN segments effectively replace the data
+   the dedup step removed; FMA's filtered train set is already 6,400
+   tracks, so the marginal data gain from 19 segments/track is much
+   smaller. Soft-vote aggregation still flips wrong segment-majorities
+   to right at the track level on both.
+5. **Best model depends on the dataset.** `logreg` only wins on GTZAN
+   naive — which is the row most distorted by leakage. On the
+   leakage-controlled splits the picture flips: **`svm_rbf` wins GTZAN
+   filtered** (0.677 vs. logreg's 0.624; with segments it ties `logreg`
+   at 0.753) and **`gbt` wins FMA** at every configuration — peaking at
+   **0.554 / 0.545 on filtered+segments**, the best FMA result in the
+   table and +5 pp above logreg's segments row. The linear model's bias
+   hurts more as the dataset gets larger and noisier; the tree
+   ensemble's feature-interaction modelling pays off where the linear
+   baseline plateaus.
 
 ## Project layout
 

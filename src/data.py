@@ -534,13 +534,14 @@ GTZAN_TARBALL_URL = (
 )
 GTZAN_TARBALL_BYTES = 1_226_192_050  # for the progress bar; advisory only.
 
-# FMA is distributed as two zips from the project's host at UNIL. The audio
-# zip extracts to ``fma_small/<prefix>/<id>.mp3``; the metadata zip extracts
-# to ``fma_metadata/tracks.csv`` (plus other csvs we don't use).
-FMA_SMALL_URL = "https://os.unil.ch/fma/fma_small.zip"
-FMA_METADATA_URL = "https://os.unil.ch/fma/fma_metadata.zip"
-FMA_SMALL_BYTES = 7_761_454_080      # ~7.2 GiB; advisory only.
-FMA_METADATA_BYTES = 358_412_237     # ~342 MiB; advisory only.
+# FMA is distributed as two zips from the project's host on SWITCH object
+# storage. The audio zip extracts to ``fma_small/<prefix>/<id>.mp3``; the
+# metadata zip extracts to ``fma_metadata/tracks.csv`` (plus other csvs we
+# don't use).
+FMA_SMALL_URL = "https://os.unil.cloud.switch.ch/fma/fma_small.zip"
+FMA_METADATA_URL = "https://os.unil.cloud.switch.ch/fma/fma_metadata.zip"
+FMA_SMALL_BYTES = 7_679_594_875      # ~7.2 GiB; advisory only.
+FMA_METADATA_BYTES = 358_412_441     # ~342 MiB; advisory only.
 FMA_EXPECTED_TRACKS = 8000
 
 
